@@ -20,8 +20,47 @@
 - Delete db after download
     - Merge downloaded db with the local existing db
 
+- Plan for Improved Bot Detection
+
+  Based on my research, here's why client-side analytics shows fewer visits and what we can implement:
+
+  Current Issues:
+
+  1. banalytiq.php only filters static files, records ALL traffic including bots
+  2. index.php has bot detection but only for dashboard display, not recording
+  3. Client-side analytics inherently filters bots because most don't execute JavaScript
+
+  Recommended Improvements:
+
+  1. Move Bot Detection to Recording Layer
+
+  - Extract isBot() function from index.php to a shared location
+  - Add bot filtering to record_visit() in banalytiq.php
+  - Add option to record bot traffic separately for analysis
+
+  2. Enhanced Bot Detection Patterns
+
+  - Add 2024/2025 AI crawler patterns (GPTBot, ClaudeBot, ChatGPT-User, Meta-ExternalAgent)
+  - Add behavioral detection (suspicious IPs, request patterns)
+  - Add browser age detection for outdated browsers
+
+  3. Additional Server-Side Filters
+
+  - Request frequency limits per IP
+  - Missing/suspicious HTTP headers detection
+  - Screen resolution filtering (common bot values)
+  - JavaScript capability detection
+
+  4. Configuration Options
+
+  - Separate bot recording vs filtering
+  - IP whitelist/blacklist support
+  - Configurable detection sensitivity
+
 
 # Future
+- Interactive Advertising Bureau’s (IAB) list of bots, spiders and crawlers
+
 - SaaS products that automate website optimization (speed, SEO, image compression, etc.) are rapidly growing. NitroPack, for instance, automates website speed optimization and has over 246,000 customers, showing that niche automation tools can scale quickly to $1 million ARR and beyond
 
 - Trend analysis tool
