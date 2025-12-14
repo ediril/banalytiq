@@ -127,84 +127,55 @@ function merge_single_database($timestamped_db_file) {
         $base_db->enableExceptions(true);
         $timestamped_db = new SQLite3($timestamped_db_path);
         $timestamped_db->enableExceptions(true);
-        
+
         // Set WAL mode and optimize base database
         $base_db->exec('PRAGMA journal_mode = WAL');
         $base_db->exec('PRAGMA synchronous = NORMAL');
         $base_db->exec('PRAGMA cache_size = 50000');
-        
-        // Get all records from timestamped database (geo fields will be NULL)
-        $timestamped_records = [];
-        $result = $timestamped_db->query('SELECT ip, dt, url, referer, ua, status FROM analytics');
-        while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
-            $key = $row['ip'] . '|' . $row['dt'] . '|' . $row['url'];
-            $timestamped_records[$key] = $row;
-        }
-        
-        // Get all existing keys from base database
-        $existing_keys = [];
-        $result = $base_db->query('SELECT ip, dt, url FROM analytics');
-        while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
-            $key = $row['ip'] . '|' . $row['dt'] . '|' . $row['url'];
-            $existing_keys[$key] = true;
-        }
-        
-        // Find new records
-        $new_records = [];
-        foreach ($timestamped_records as $key => $record) {
-            if (!isset($existing_keys[$key])) {
-                $new_records[] = $record;
-            }
-        }
-        
-        $new_count = count($new_records);
-        
-        if ($new_count > 0) {
-            echo "Found $new_count new records to insert.\n";
-        } else {
+
+        // Attach timestamped database to base database for efficient SQL-based merge
+        $base_db->exec("ATTACH DATABASE '$timestamped_db_path' AS source_db");
+
+        // Count new records using SQL (memory efficient)
+        $count_result = $base_db->querySingle("
+            SELECT COUNT(*) FROM source_db.analytics s
+            WHERE NOT EXISTS (
+                SELECT 1 FROM main.analytics m
+                WHERE m.ip = s.ip AND m.dt = s.dt AND m.url = s.url
+            )
+        ");
+        $new_count = (int)$count_result;
+
+        if ($new_count == 0) {
             echo "No new records to merge. Database is already up to date.\n";
+            $base_db->exec('DETACH DATABASE source_db');
             $timestamped_db->close();
             $base_db->close();
             return ['success' => true, 'inserted_count' => 0];
         }
-        
-        // Insert new records into base database in batches
+
+        echo "Found $new_count new records to insert.\n";
+
+        // Insert new records using SQL-based approach (no PHP memory needed for data)
         $base_db->exec('BEGIN TRANSACTION');
         $transaction_active = true;
-        
-        $insert_stmt = $base_db->prepare('
-            INSERT INTO analytics (ip, dt, url, referer, ua, status, country, city, latitude, longitude)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ');
-        
-        $batch_size = 1000;
-        $inserted_count = 0;
-        
-        foreach ($new_records as $i => $record) {
-            $insert_stmt->bindValue(1, $record['ip'], SQLITE3_TEXT);
-            $insert_stmt->bindValue(2, $record['dt'], SQLITE3_INTEGER);
-            $insert_stmt->bindValue(3, $record['url'], SQLITE3_TEXT);
-            $insert_stmt->bindValue(4, $record['referer'], SQLITE3_TEXT);
-            $insert_stmt->bindValue(5, $record['ua'], SQLITE3_TEXT);
-            $insert_stmt->bindValue(6, $record['status'], SQLITE3_INTEGER);
-            $insert_stmt->bindValue(7, null, SQLITE3_TEXT);  // country - always NULL in new downloads
-            $insert_stmt->bindValue(8, null, SQLITE3_TEXT);  // city - always NULL in new downloads
-            $insert_stmt->bindValue(9, null, SQLITE3_NUM);   // latitude - always NULL in new downloads
-            $insert_stmt->bindValue(10, null, SQLITE3_NUM);  // longitude - always NULL in new downloads
-            
-            $insert_stmt->execute();
-            $insert_stmt->reset();
-            $inserted_count++;
-            
-            // Commit in batches and show progress
-            if (($i + 1) % $batch_size == 0) {
-                $base_db->exec('COMMIT; BEGIN TRANSACTION');
-                echo "Inserted $inserted_count/$new_count records...\n";
-            }
-        }
-        
+
+        $base_db->exec("
+            INSERT INTO main.analytics (ip, dt, url, referer, ua, status, country, city, latitude, longitude)
+            SELECT s.ip, s.dt, s.url, s.referer, s.ua, s.status, NULL, NULL, NULL, NULL
+            FROM source_db.analytics s
+            WHERE NOT EXISTS (
+                SELECT 1 FROM main.analytics m
+                WHERE m.ip = s.ip AND m.dt = s.dt AND m.url = s.url
+            )
+        ");
+
+        $inserted_count = $base_db->changes();
+
         $base_db->exec('COMMIT');
         $transaction_active = false;
+
+        $base_db->exec('DETACH DATABASE source_db');
         
         // Close databases before file operations
         $timestamped_db->close();
